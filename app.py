@@ -1,104 +1,73 @@
 import streamlit as st
 import pandas as pd
-from fpdf import FPDF
-import base64
-from PIL import Image
-import io
+import os
+from datetime import datetime
 
-# --- Helper to process images for PDF ---
-def process_image(uploaded_file):
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        # Convert to RGB if necessary (to handle PNG transparency)
-        if image.mode in ("RGBA", "P"):
-            image = image.convert("RGB")
-        
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
-        return img_byte_arr
-    return None
+# Define the Excel file name
+DB_FILE = "faculty_database.xlsx"
 
-def generate_pdf(data, photo_bytes):
-    pdf = FPDF()
-    pdf.add_page()
+def save_to_excel(new_data_dict):
+    """Saves data to Excel and ensures it persists after refresh."""
+    # Convert the dictionary to a DataFrame
+    new_df = pd.DataFrame([new_data_dict])
     
-    # Header
-    pdf.set_font("Arial", 'B', 18)
-    pdf.cell(0, 10, "Faculty Performance Report", ln=True, align='C')
-    pdf.ln(10)
-
-    # Sidebar/Photo Logic
-    if photo_bytes:
-        # Save temp image for FPDF to grab
-        with open("temp_photo.jpg", "wb") as f:
-            f.write(photo_bytes.getbuffer())
-        pdf.image("temp_photo.jpg", x=150, y=30, w=40)
-
-    # Faculty Info
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(40, 10, "Name: ", 0)
-    pdf.set_font("Arial", '', 12)
-    pdf.cell(0, 10, data['name'], ln=True)
-
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(40, 10, "Faculty ID: ", 0)
-    pdf.set_font("Arial", '', 12)
-    pdf.cell(0, 10, data['id'], ln=True)
-    
-    pdf.ln(20) # Space after header/photo
-
-    # Workload Section
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, " Academic Workload", ln=True, fill=True)
-    pdf.set_font("Arial", '', 11)
-    pdf.multi_cell(0, 10, f"Subjects: {', '.join(data['subjects'])}")
-    pdf.multi_cell(0, 10, f"Labs: {', '.join(data['labs'])}")
-
-    # Publications
-    pdf.ln(5)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, " Research & Publications", ln=True, fill=True)
-    pdf.set_font("Arial", '', 11)
-    for paper in data['papers']:
-        pdf.cell(0, 10, f"- {paper}", ln=True)
-
-    # Score
-    pdf.ln(10)
-    pdf.set_font("Arial", 'B', 16)
-    pdf.set_text_color(39, 174, 96) # Green color for score
-    pdf.cell(0, 10, f"Final Performance Score: {data['score']}", ln=True, align='C')
-
-    return pdf.output(dest='S').encode('latin-1')
+    if os.path.exists(DB_FILE):
+        # Load existing data and append
+        existing_df = pd.read_excel(DB_FILE)
+        updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+        updated_df.to_excel(DB_FILE, index=False)
+    else:
+        # Create new file with headers
+        new_df.to_excel(DB_FILE, index=False)
 
 # --- Streamlit UI ---
-st.title("Faculty ERP with Photo Report")
+st.title("Faculty ERP (Permanent Excel Storage)")
 
-with st.form("erp_form"):
-    col1, col2 = st.columns([1, 2])
+with st.form("faculty_form", clear_on_submit=True):
+    col1, col2 = st.columns(2)
     with col1:
-        photo = st.file_uploader("Upload Profile Photo", type=['jpg', 'jpeg', 'png'])
-    with col2:
         name = st.text_input("Full Name")
         f_id = st.text_input("Faculty ID")
-
-    subjects = st.multiselect("Subjects", ["AI", "Math", "Physics", "CS"])
-    labs = st.multiselect("Labs", ["Hardware Lab", "Software Lab"])
-    papers = st.text_area("Research Paper Titles (One per line)")
+    with col2:
+        subjects = st.multiselect("Subjects", ["AI", "ML", "Python", "Data Science"])
+        labs = st.multiselect("Labs", ["Lab A", "Lab B"])
     
-    submitted = st.form_submit_button("Generate Report")
+    papers = st.text_area("Research Papers (One per line)")
+    
+    submitted = st.form_submit_button("Submit & Save Permanently")
 
 if submitted:
-    paper_list = [p.strip() for p in papers.split('\n') if p.strip()]
-    score = (len(subjects) * 10) + (len(labs) * 15) + (len(paper_list) * 50)
+    if name and f_id:
+        # 1. Logic: Calculate Score
+        paper_list = [p.strip() for p in papers.split('\n') if p.strip()]
+        score = (len(subjects) * 10) + (len(labs) * 15) + (len(paper_list) * 50)
+        
+        # 2. Prepare Data Object
+        data_to_save = {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Name": name,
+            "Faculty_ID": f_id,
+            "Subjects": ", ".join(subjects),
+            "Labs": ", ".join(labs),
+            "Paper_Count": len(paper_list),
+            "Total_Score": score
+        }
+        
+        # 3. Save to Excel
+        save_to_excel(data_to_save)
+        st.success(f"Data for {name} saved to {DB_FILE}!")
+    else:
+        st.error("Name and ID are required.")
+
+# --- View Stored Data ---
+st.divider()
+st.subheader("Stored Faculty Records")
+if os.path.exists(DB_FILE):
+    df_display = pd.read_excel(DB_FILE)
+    st.dataframe(df_display)
     
-    faculty_data = {
-        "name": name, "id": f_id, "subjects": subjects, 
-        "labs": labs, "papers": paper_list, "score": score
-    }
-
-    photo_processed = process_image(photo)
-    pdf_output = generate_pdf(faculty_data, photo_processed)
-
-    st.success(f"Score Calculated: {score}")
-    st.download_button("Download PDF Report", data=pdf_output, file_name="Faculty_Report.pdf")
+    # Allow user to download the whole database
+    with open(DB_FILE, "rb") as f:
+        st.download_button("Download Full Excel Database", f, file_name=DB_FILE)
+else:
+    st.info("No records found yet. Submit the form to create the database.")
