@@ -2,107 +2,103 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 import base64
+from PIL import Image
+import io
 
-# --- Utility Functions ---
-def calculate_score(subjects, labs, papers):
-    """Simple logic: 10 points per subject, 15 per lab, 50 per paper."""
-    score = (len(subjects) * 10) + (len(labs) * 15) + (len(papers) * 50)
-    return score
+# --- Helper to process images for PDF ---
+def process_image(uploaded_file):
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        # Convert to RGB if necessary (to handle PNG transparency)
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+        
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        return img_byte_arr
+    return None
 
-def generate_pdf(data):
+def generate_pdf(data, photo_bytes):
     pdf = FPDF()
     pdf.add_page()
+    
+    # Header
+    pdf.set_font("Arial", 'B', 18)
+    pdf.cell(0, 10, "Faculty Performance Report", ln=True, align='C')
+    pdf.ln(10)
+
+    # Sidebar/Photo Logic
+    if photo_bytes:
+        # Save temp image for FPDF to grab
+        with open("temp_photo.jpg", "wb") as f:
+            f.write(photo_bytes.getbuffer())
+        pdf.image("temp_photo.jpg", x=150, y=30, w=40)
+
+    # Faculty Info
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(40, 10, "Name: ", 0)
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(0, 10, data['name'], ln=True)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(40, 10, "Faculty ID: ", 0)
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(0, 10, data['id'], ln=True)
+    
+    pdf.ln(20) # Space after header/photo
+
+    # Workload Section
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, " Academic Workload", ln=True, fill=True)
+    pdf.set_font("Arial", '', 11)
+    pdf.multi_cell(0, 10, f"Subjects: {', '.join(data['subjects'])}")
+    pdf.multi_cell(0, 10, f"Labs: {', '.join(data['labs'])}")
+
+    # Publications
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, " Research & Publications", ln=True, fill=True)
+    pdf.set_font("Arial", '', 11)
+    for paper in data['papers']:
+        pdf.cell(0, 10, f"- {paper}", ln=True)
+
+    # Score
+    pdf.ln(10)
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="Faculty Performance Report", ln=True, align='C')
-    
-    pdf.set_font("Arial", size=12)
-    pdf.ln(10)
-    
-    # Basic Details
-    pdf.cell(200, 10, txt=f"Name: {data['name']}", ln=True)
-    pdf.cell(200, 10, txt=f"Faculty ID: {data['id']}", ln=True)
-    
-    pdf.ln(5)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt="Academic Workload:", ln=True)
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Subjects: {', '.join(data['subjects'])}", ln=True)
-    pdf.cell(200, 10, txt=f"Labs: {', '.join(data['labs'])}", ln=True)
-    
-    pdf.ln(5)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(200, 10, txt="Research & Publications:", ln=True)
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Papers Published: {len(data['papers'])}", ln=True)
-    for i, paper in enumerate(data['papers'], 1):
-        pdf.cell(200, 10, txt=f"  {i}. {paper}", ln=True)
-        
-    pdf.ln(10)
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt=f"Total Performance Score: {data['score']}", ln=True)
-    
+    pdf.set_text_color(39, 174, 96) # Green color for score
+    pdf.cell(0, 10, f"Final Performance Score: {data['score']}", ln=True, align='C')
+
     return pdf.output(dest='S').encode('latin-1')
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Faculty ERP Portal", layout="wide")
+st.title("Faculty ERP with Photo Report")
 
-st.title("🎓 Faculty ERP & Performance Tracker")
-st.markdown("Enter your professional details to calculate your API score and generate a report.")
-
-with st.form("faculty_form"):
-    col1, col2 = st.columns(2)
-    
+with st.form("erp_form"):
+    col1, col2 = st.columns([1, 2])
     with col1:
+        photo = st.file_uploader("Upload Profile Photo", type=['jpg', 'jpeg', 'png'])
+    with col2:
         name = st.text_input("Full Name")
         f_id = st.text_input("Faculty ID")
-        photo = st.file_uploader("Upload Profile Photo", type=['jpg', 'png', 'jpeg'])
 
-    with col2:
-        subjects = st.multiselect("Subjects Taken", 
-                                  ["Machine Learning", "Software Engineering", "DBMS", "Operating Systems", "Python Programming", "Data Structures"])
-        labs = st.multiselect("Labs Conducted", 
-                              ["Data Science Lab", "C Programming Lab", "Java Lab", "AI Lab"])
-
-    st.divider()
-    st.subheader("Research & Publications")
-    paper_names = st.text_area("Enter Research Paper Titles (one per line)")
-    uploaded_papers = st.file_uploader("Upload Research Papers (PDF)", type=['pdf'], accept_multiple_files=True)
+    subjects = st.multiselect("Subjects", ["AI", "Math", "Physics", "CS"])
+    labs = st.multiselect("Labs", ["Hardware Lab", "Software Lab"])
+    papers = st.text_area("Research Paper Titles (One per line)")
     
-    submitted = st.form_submit_button("Submit Details & Calculate Score")
+    submitted = st.form_submit_button("Generate Report")
 
 if submitted:
-    if not name or not f_id:
-        st.error("Please provide Name and Faculty ID.")
-    else:
-        # Process papers
-        paper_list = [p.strip() for p in paper_names.split('\n') if p.strip()]
-        
-        # Calculate Score
-        final_score = calculate_score(subjects, labs, paper_list)
-        
-        # Prepare Data for PDF
-        faculty_data = {
-            "name": name,
-            "id": f_id,
-            "subjects": subjects,
-            "labs": labs,
-            "papers": paper_list,
-            "score": final_score
-        }
-        
-        # Display Results
-        st.success("Details Submitted Successfully!")
-        
-        kpi1, kpi2, kpi3 = st.columns(3)
-        kpi1.metric("Subjects/Labs", f"{len(subjects)} / {len(labs)}")
-        kpi2.metric("Papers Published", len(paper_list))
-        kpi3.metric("Calculated Score", final_score)
-        
-        # PDF Generation
-        pdf_bytes = generate_pdf(faculty_data)
-        st.download_button(
-            label="📄 Download Performance Report (PDF)",
-            data=pdf_bytes,
-            file_name=f"Report_{f_id}.pdf",
-            mime="application/pdf"
-        )
+    paper_list = [p.strip() for p in papers.split('\n') if p.strip()]
+    score = (len(subjects) * 10) + (len(labs) * 15) + (len(paper_list) * 50)
+    
+    faculty_data = {
+        "name": name, "id": f_id, "subjects": subjects, 
+        "labs": labs, "papers": paper_list, "score": score
+    }
+
+    photo_processed = process_image(photo)
+    pdf_output = generate_pdf(faculty_data, photo_processed)
+
+    st.success(f"Score Calculated: {score}")
+    st.download_button("Download PDF Report", data=pdf_output, file_name="Faculty_Report.pdf")
